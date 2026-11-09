@@ -1,0 +1,587 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Equipamiento</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<div id="panel">
+  <canvas id="glass"></canvas>
+  <div id="frame"></div>
+
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <linearGradient id="gold" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0" stop-color="#f0dca6"/>
+        <stop offset=".45" stop-color="#a88b52"/>
+        <stop offset="1" stop-color="#5a4728"/>
+      </linearGradient>
+      <!-- esquina: escuadra + volutas + rombo -->
+      <symbol id="corner" viewBox="0 0 70 70">
+        <g stroke="#000" stroke-width=".8" fill="url(#gold)">
+          <path d="M6 6 H50 L44 12 H12 V44 L6 50 Z"/>
+          <path d="M50 6 l6 -3 l-2 6 z M6 50 l-3 6 l6 -2 z"/>
+          <circle cx="58" cy="9" r="2.6"/><circle cx="9" cy="58" r="2.6"/>
+        </g>
+        <g fill="none" stroke="url(#gold)" stroke-width="2.6" stroke-linecap="round">
+          <path d="M12 12 C34 12 38 30 24 30 C16 30 17 21 23 22"/>
+          <path d="M12 12 C12 34 30 38 30 24 C30 16 21 17 22 23"/>
+          <path d="M44 12 C40 18 34 18 32 15"/>
+          <path d="M12 44 C18 40 18 34 15 32"/>
+        </g>
+        <g stroke="#000" stroke-width=".8">
+          <rect x="3" y="3" width="15" height="15" transform="rotate(45 10.5 10.5)" fill="url(#gold)"/>
+          <rect x="7" y="7" width="7" height="7" transform="rotate(45 10.5 10.5)" fill="#2a2114"/>
+        </g>
+      </symbol>
+      <!-- blasón de lado: rombo central con volutas simétricas -->
+      <symbol id="crest" viewBox="0 0 130 32">
+        <path d="M14 16 H116" stroke="#000" stroke-width="4"/>
+        <path d="M14 16 H116" stroke="url(#gold)" stroke-width="2"/>
+        <g fill="none" stroke="url(#gold)" stroke-width="2.6" stroke-linecap="round">
+          <path d="M52 16 C44 4 30 4 28 12 C27 18 35 20 37 15"/>
+          <path d="M52 16 C44 28 30 28 28 20 C27 14 35 12 37 17"/>
+          <path d="M78 16 C86 4 100 4 102 12 C103 18 95 20 93 15"/>
+          <path d="M78 16 C86 28 100 28 102 20 C103 14 95 12 93 17"/>
+        </g>
+        <g stroke="#000" stroke-width=".8" fill="url(#gold)">
+          <path d="M65 2 L79 16 L65 30 L51 16 Z"/>
+          <circle cx="12" cy="16" r="3"/><circle cx="118" cy="16" r="3"/>
+        </g>
+        <path d="M65 9 L72 16 L65 23 L58 16 Z" fill="#2a2114" stroke="#000" stroke-width=".6"/>
+        <circle cx="65" cy="16" r="2" fill="#c9503a"/>
+      </symbol>
+    </defs>
+  </svg>
+  <svg class="corner tl"><use href="#corner"/></svg>
+  <svg class="corner tr"><use href="#corner"/></svg>
+  <svg class="corner bl"><use href="#corner"/></svg>
+  <svg class="corner br"><use href="#corner"/></svg>
+  <svg class="crest b"><use href="#crest"/></svg>
+  <svg class="crest l"><use href="#crest"/></svg>
+  <svg class="crest r"><use href="#crest"/></svg>
+  <div class="plaque"><span></span></div>
+
+  <div id="equip" aria-label="Equipamiento">
+    <div class="slot casco"><i></i></div>
+    <div class="slot amuleto"><i></i></div>
+    <div class="slot arma"><i></i></div>
+    <div class="slot pechera"><i></i></div>
+    <div class="slot mano"><i></i></div>
+    <div class="slot guantes"><i></i></div>
+    <div class="slot cinturon"><i></i></div>
+    <div class="slot anillo"><i></i></div>
+    <div class="slot botas"><i></i></div>
+  </div>
+</div>
+
+<script src="scripts/d3-delaunay.min.js"></script>
+<script>
+/* =========================================================
+   1) Escena PLACEHOLDER (espacio 1000x1000) pintada con
+      colores-etiqueta.
+   2) Mosaico Voronoi de cristales irregulares: textura de
+      color + textura de geometría (distancia al borde).
+   3) Shader WebGL de "liquid glass" por cristal: bisel,
+      refracción, aberración cromática y brillo animado.
+   ========================================================= */
+const L = { SKY: 0, TITAN: 1, ROCK: 2, GRASS: 3, DRAGON: 4, WING: 5, TITAN_LIT: 6, CHAIN: 7 };
+const LSTEP = 30;
+const labelColor = i => `rgb(${i * LSTEP},0,0)`;
+
+let seed = 7;
+const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+const r = (a, b) => a + rnd() * (b - a);
+
+function cubic(p0, p1, p2, p3, t) {
+  const u = 1 - t;
+  return [
+    u*u*u*p0[0] + 3*u*u*t*p1[0] + 3*u*t*t*p2[0] + t*t*t*p3[0],
+    u*u*u*p0[1] + 3*u*u*t*p1[1] + 3*u*t*t*p2[1] + t*t*t*p3[1]
+  ];
+}
+
+/* ---------------- Escena ---------------- */
+/* La composición evita las zonas que tapan los slots:
+   titán en la franja inferior-izquierda, cadenas por los huecos,
+   islas asomando entre casco/pechera y armas, dragón subiendo
+   por el hueco derecho con cabeza y alas en la franja superior. */
+const dragonSegs = [
+  [[995, 935], [890, 995], [720, 965], [610, 885]],   // cola (abajo-derecha)
+  [[610, 885], [520, 820], [420, 760], [365, 665]],
+  [[365, 665], [300, 560], [320, 455], [420, 432]],   // rodea la isla por la izquierda (delante)
+  [[420, 432], [520, 405], [600, 470], [655, 425]],   // cruza por detrás de la isla
+  [[655, 425], [705, 375], [700, 300], [728, 228]],   // sube por el hueco derecho
+  [[728, 228], [758, 160], [800, 122], [852, 98]]     // cuello hacia arriba-derecha
+];
+const DRAGON_BEHIND = [3 / 6, 4 / 6];
+const dragonPts = [];
+dragonSegs.forEach((s, si) => {
+  for (let i = 0; i <= 50; i++) {
+    const t = i / 50, g = (si + t) / dragonSegs.length;
+    dragonPts.push({ p: cubic(...s, t), g });
+  }
+});
+const bodyWidth = g => g < 0.5 ? 6 + 88 * g : 50 - 10 * (g - 0.5) / 0.5;   // cuello grueso (~40)
+
+function drawDragon(ctx, from, to) {
+  ctx.fillStyle = labelColor(L.DRAGON);
+  dragonPts.forEach(({ p, g }) => {
+    if (g < from || g > to) return;
+    ctx.beginPath(); ctx.arc(p[0], p[1], bodyWidth(g) / 2 + 3, 0, Math.PI * 2); ctx.fill();
+  });
+}
+
+function dragonHead(ctx) {
+  const a = dragonPts[dragonPts.length - 1].p, b = dragonPts[dragonPts.length - 6].p;
+  const ang = Math.atan2(a[1] - b[1], a[0] - b[0]);
+  ctx.save(); ctx.translate(a[0], a[1]); ctx.rotate(ang); ctx.scale(1.35, 1.35);
+  ctx.fillStyle = labelColor(L.DRAGON);
+  // cráneo + mandíbula superior
+  ctx.beginPath();
+  ctx.moveTo(-18, -22); ctx.quadraticCurveTo(25, -34, 60, -20); ctx.lineTo(112, -12);
+  ctx.lineTo(116, -4); ctx.lineTo(62, 2); ctx.lineTo(10, 12); ctx.lineTo(-18, 20); ctx.closePath(); ctx.fill();
+  // mandíbula inferior abierta (rugido)
+  ctx.beginPath();
+  ctx.moveTo(4, 10); ctx.lineTo(60, 12); ctx.lineTo(100, 34); ctx.lineTo(94, 42); ctx.lineTo(40, 30); ctx.lineTo(-10, 22); ctx.closePath(); ctx.fill();
+  // cuernos hacia atrás
+  ctx.beginPath(); ctx.moveTo(0, -20); ctx.quadraticCurveTo(-50, -45, -78, -30); ctx.quadraticCurveTo(-40, -30, 16, -12); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(14, -26); ctx.quadraticCurveTo(-20, -75, -55, -80); ctx.quadraticCurveTo(-15, -55, 30, -22); ctx.fill();
+  // púas en la nuca
+  for (let k = 0; k < 3; k++) {
+    ctx.beginPath(); ctx.moveTo(-30 - k * 22, -14); ctx.lineTo(-44 - k * 22, -38); ctx.lineTo(-48 - k * 22, -12); ctx.fill();
+  }
+  ctx.restore();
+  return { x: a[0], y: a[1], ang };
+}
+
+// Alas de murciélago abiertas en la franja superior, con huesos
+function drawWings(ctx) {
+  const wing = (root, elbow, tips, troughs) => {
+    ctx.fillStyle = labelColor(L.WING);
+    ctx.beginPath(); ctx.moveTo(...root); ctx.lineTo(...elbow);
+    tips.forEach((t, i) => { ctx.lineTo(...t); if (troughs[i]) ctx.quadraticCurveTo(...troughs[i]); });
+    ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = labelColor(L.DRAGON); ctx.lineCap = "round";
+    // solo el hueso principal (los huesos finos generaban cristales sueltos)
+    ctx.lineWidth = 20; ctx.beginPath(); ctx.moveTo(...root); ctx.lineTo(...elbow); ctx.stroke();
+  };
+  // ala izquierda (se abre hacia arriba-izquierda)
+  wing([712, 285], [610, 120],
+       [[455, 40], [470, 150], [540, 215], [640, 285]],
+       [[505, 120, 470, 150], [500, 190, 540, 215], [585, 235, 640, 285], [680, 290, 712, 300]]);
+  // ala derecha (detrás de la cabeza, hacia la derecha)
+  wing([745, 265], [880, 205],
+       [[1010, 150], [1010, 260], [960, 320], [870, 330]],
+       [[995, 210, 1010, 260], [990, 300, 960, 320], [920, 315, 870, 330], [800, 300, 745, 290]]);
+}
+
+function drawIslands(ctx) {
+  const isl = (cx, cy, rx, ry, tip) => {
+    ctx.fillStyle = labelColor(L.ROCK);
+    ctx.beginPath();
+    ctx.moveTo(cx - rx, cy);
+    ctx.quadraticCurveTo(cx - rx * 0.8, cy + (tip - cy) * 0.5, cx - rx * 0.25, cy + (tip - cy) * 0.75);
+    ctx.lineTo(cx, tip);
+    ctx.lineTo(cx + rx * 0.3, cy + (tip - cy) * 0.7);
+    ctx.quadraticCurveTo(cx + rx * 0.85, cy + (tip - cy) * 0.45, cx + rx, cy);
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle = labelColor(L.GRASS);
+    ctx.beginPath(); ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2); ctx.fill();
+    // arbolitos
+    for (let k = -1; k <= 1; k += 2) {
+      ctx.beginPath(); ctx.arc(cx + k * rx * 0.45, cy - ry * 0.9, ry * 0.9, 0, Math.PI * 2); ctx.fill();
+    }
+  };
+  // rocas sueltas bajo la isla grande
+  ctx.fillStyle = labelColor(L.ROCK);
+  [[400, 640, 22], [615, 700, 18], [470, 760, 14]].forEach(([x, y, s]) => {
+    ctx.beginPath(); ctx.moveTo(x - s, y - s * 0.4); ctx.lineTo(x + s, y - s * 0.5); ctx.lineTo(x + s * 0.2, y + s * 1.2); ctx.closePath(); ctx.fill();
+  });
+  isl(330, 300, 60, 15, 385);
+  isl(680, 560, 52, 13, 628);
+  isl(505, 415, 225, 36, 700);
+}
+
+// Titán de perfil mirando a la derecha, inclinado hacia atrás, tirando con los dos brazos
+const TITAN_HANDS = [[402, 792], [438, 842]];
+// Cadenas doradas: de los puños a las islas (forman parte del mosaico)
+const CHAINS = [
+  [TITAN_HANDS[0], [355, 470]], [TITAN_HANDS[0], [332, 380]],
+  [TITAN_HANDS[1], [560, 640]], [TITAN_HANDS[1], [680, 624]]
+];
+let chainToggle = false;
+function drawTitan(ctx) {
+  ctx.lineCap = "round"; ctx.lineJoin = "round";
+  // todo el cuerpo es de la misma piedra
+  ctx.strokeStyle = ctx.fillStyle = labelColor(L.TITAN_LIT);
+  // brazo trasero
+  ctx.lineWidth = 52;
+  ctx.beginPath(); ctx.moveTo(150, 790); ctx.quadraticCurveTo(280, 772, TITAN_HANDS[0][0] - 8, TITAN_HANDS[0][1]); ctx.stroke();
+  ctx.beginPath(); ctx.arc(...TITAN_HANDS[0], 31, 0, Math.PI * 2); ctx.fill();
+  // torso: espalda y hombro esbeltos, cortado por la esquina (cintura estrecha)
+  const torso = new Path2D("M-30 1010 L-45 800 Q-10 738 60 734 Q150 736 196 800 Q214 850 186 900 Q160 950 150 1010 Z");
+  ctx.fill(torso);
+  // una única banda cruzada en diagonal sobre el torso
+  ctx.save(); ctx.clip(torso);
+  ctx.strokeStyle = labelColor(L.TITAN);
+  ctx.lineWidth = 30; ctx.lineCap = "butt";
+  ctx.beginPath(); ctx.moveTo(185, 760); ctx.lineTo(-40, 990); ctx.stroke();
+  ctx.restore();
+  ctx.strokeStyle = ctx.fillStyle = labelColor(L.TITAN_LIT); ctx.lineCap = "round";
+  // cuello y cabeza de piedra, de perfil (calva, sin nada encima)
+  ctx.strokeStyle = ctx.fillStyle = labelColor(L.TITAN_LIT);
+  ctx.lineWidth = 34;
+  ctx.beginPath(); ctx.moveTo(112, 700); ctx.lineTo(98, 750); ctx.stroke();
+  ctx.beginPath(); ctx.ellipse(122, 660, 40, 50, -0.15, 0, Math.PI * 2); ctx.fill();
+  // arco de la ceja, nariz y mandíbula
+  ctx.fill(new Path2D("M138 630 L170 640 L166 652 L184 674 L166 682 L170 700 L160 710 L160 724 L120 732 L112 680 Z"));
+  // brazo delantero (iluminado), extendido hacia las cadenas
+  ctx.lineWidth = 56;
+  ctx.beginPath(); ctx.moveTo(180, 850); ctx.quadraticCurveTo(310, 860, TITAN_HANDS[1][0] - 8, TITAN_HANDS[1][1]); ctx.stroke();
+  ctx.beginPath(); ctx.arc(...TITAN_HANDS[1], 34, 0, Math.PI * 2); ctx.fill();
+}
+
+// Colores desaturados
+function colorFor(label, nx, ny) {
+  switch (label) {
+    // piedra gris
+    case L.TITAN:     return `hsl(${r(25, 45)},${r(5, 10)}%,${r(20, 28)}%)`;
+    case L.TITAN_LIT: return `hsl(${r(30, 45)},${r(6, 12)}%,${r(66, 74)}%)`;
+    case L.ROCK:      return `hsl(${r(15, 32)},${r(10, 18)}%,${r(26, 36)}%)`;
+    case L.GRASS:     return `hsl(${r(95, 140)},${r(22, 34)}%,${r(34, 46)}%)`;
+    case L.DRAGON:    return `hsl(${r(250, 280)},${r(6, 12)}%,${r(6, 12)}%)`;
+    case L.WING:      return `hsl(${r(265, 295)},${r(10, 16)}%,${r(20, 27)}%)`;
+    // oro: eslabones alternos claro/oscuro
+    case L.CHAIN:     return (chainToggle = !chainToggle)
+                        ? `hsl(${r(40, 46)},${r(48, 58)}%,${r(56, 64)}%)`
+                        : `hsl(${r(36, 42)},${r(40, 50)}%,${r(36, 44)}%)`;
+    default: {
+      // cielo más uniforme y claro para que las siluetas destaquen
+      const hue = (200 + 140 * nx - 70 * ny + r(-14, 14) + 360) % 360;
+      return `hsl(${hue},${r(24, 36)}%,${r(50, 60)}%)`;
+    }
+  }
+}
+
+function glowDot(ctx, x, y, rad, color) {
+  const g = ctx.createRadialGradient(x, y, 0, x, y, rad * 3);
+  g.addColorStop(0, color); g.addColorStop(0.35, color); g.addColorStop(1, "transparent");
+  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(x, y, rad * 3, 0, Math.PI * 2); ctx.fill();
+}
+
+/* ---------------- Mosaico: color + geometría ---------------- */
+const GROUT = 0.9;   // media junta (px CSS)
+const BEVEL = 4;     // ancho del bisel (px CSS)
+
+function buildTextures(pw, ph, dpr) {
+  const W = Math.round(pw * dpr), H = Math.round(ph * dpr);
+  const s = Math.max(W, H) / 1000;                 // escena "cover"
+  const ox = (W - 1000 * s) / 2, oy = (H - 1000 * s) / 2;
+  seed = 7;
+
+  // Etiquetas
+  const lab = document.createElement("canvas"); lab.width = W; lab.height = H;
+  const lc = lab.getContext("2d");
+  lc.fillStyle = labelColor(L.SKY); lc.fillRect(0, 0, W, H);
+  lc.setTransform(s, 0, 0, s, ox, oy);
+  drawWings(lc);
+  drawDragon(lc, DRAGON_BEHIND[0], DRAGON_BEHIND[1]);   // tramo que pasa por detrás de la isla
+  drawIslands(lc);
+  drawDragon(lc, 0, DRAGON_BEHIND[0]);
+  drawDragon(lc, DRAGON_BEHIND[1], 1);
+  const head = dragonHead(lc);
+  drawTitan(lc);
+  // Cadenas: una franja del ancho de un cristal, para que se formen con cristales dorados
+  const sp = Math.max(8, pw / 42) * dpr;
+  lc.strokeStyle = labelColor(L.CHAIN); lc.lineCap = "round";
+  lc.lineWidth = (sp * 0.95) / s;
+  CHAINS.forEach(([a, b]) => { lc.beginPath(); lc.moveTo(...a); lc.lineTo(...b); lc.stroke(); });
+  lc.setTransform(1, 0, 0, 1, 0, 0);
+  const lab_d = lc.getImageData(0, 0, W, H).data;
+  // Los bordes suavizados generan valores intermedios (p. ej. dragón+cielo = "hierba"):
+  // solo se aceptan valores exactos y el color del cristal se decide por votación.
+  const rawLabel = (x, y) => {
+    const xi = Math.min(W - 1, Math.max(0, x | 0)), yi = Math.min(H - 1, Math.max(0, y | 0));
+    const v = lab_d[(yi * W + xi) * 4], m = v % LSTEP;
+    return (m <= 2 || m >= LSTEP - 2) ? Math.round(v / LSTEP) : -1;
+  };
+  const labelAt = (x, y) => {
+    const votes = {}; let best = 0, bestN = 0;
+    const k = 2.5 * dpr;
+    for (const [dx, dy] of [[0, 0], [k, 0], [-k, 0], [0, k], [0, -k], [k, k], [-k, -k], [k, -k], [-k, k]]) {
+      const l = rawLabel(x + dx, y + dy);
+      if (l < 0) continue;
+      votes[l] = (votes[l] || 0) + 1;
+      if (votes[l] > bestN) { bestN = votes[l]; best = l; }
+    }
+    return best;
+  };
+
+  // Puntos del Voronoi
+  // Puntos base + puntos extra en los contornos de las figuras (cristales más finos ahí)
+  // con una distancia mínima entre centros para que no salgan cristales diminutos
+  const minD = sp * 0.62, cell = minD / 1.42, cols = Math.ceil((W + 4 * sp) / cell);
+  const hash = new Map(), pts = [];
+  const tryAdd = (x, y) => {
+    const cx = Math.floor((x + 2 * sp) / cell), cy = Math.floor((y + 2 * sp) / cell);
+    for (let j = -2; j <= 2; j++) for (let i = -2; i <= 2; i++) {
+      const p = hash.get((cy + j) * cols + cx + i);
+      if (p && Math.hypot(p[0] - x, p[1] - y) < minD) return;
+    }
+    const p = [x, y]; hash.set(cy * cols + cx, p); pts.push(p);
+  };
+  // 1º una fila de cristales centrada sobre cada cadena (eslabones)
+  CHAINS.forEach(([a, b]) => {
+    const ax = a[0] * s + ox, ay = a[1] * s + oy, bx = b[0] * s + ox, by = b[1] * s + oy;
+    const len = Math.hypot(bx - ax, by - ay), n = Math.max(1, Math.round(len / (sp * 0.72)));
+    for (let k = 0; k <= n; k++) tryAdd(ax + (bx - ax) * k / n, ay + (by - ay) * k / n);
+  });
+  // 2º los contornos (para que las siluetas queden nítidas), 3º el relleno
+  const fs = sp * 0.6;
+  for (let y = fs / 2; y < H; y += fs)
+    for (let x = fs / 2; x < W; x += fs) {
+      const l0 = labelAt(x, y);
+      if (l0 !== labelAt(x + fs, y) || l0 !== labelAt(x, y + fs) || l0 !== labelAt(x - fs, y) || l0 !== labelAt(x, y - fs))
+        tryAdd(x + r(-fs * 0.3, fs * 0.3), y + r(-fs * 0.3, fs * 0.3));
+    }
+  for (let y = -sp; y < H + sp; y += sp)
+    for (let x = -sp; x < W + sp; x += sp)
+      tryAdd(x + r(-sp * 0.45, sp * 0.45), y + r(-sp * 0.45, sp * 0.45));
+  const vor = d3.Delaunay.from(pts).voronoi([0, 0, W, H]);
+
+  // Textura de color (cristales planos + cadenas + ojos)
+  const col = document.createElement("canvas"); col.width = W; col.height = H;
+  const c = col.getContext("2d");
+  c.fillStyle = "#0b0b0e"; c.fillRect(0, 0, W, H);
+
+  // Textura de geometría: R = distancia al borde (normalizada al bisel), G = aleatorio por cristal, B = dentro
+  const geo = new Uint8Array(W * H * 4);
+  const g = GROUT * dpr, bw = BEVEL * dpr;
+
+  for (let i = 0; i < pts.length; i++) {
+    const poly = vor.cellPolygon(i); if (!poly) continue;
+    const n = poly.length - 1;               // el último punto repite el primero
+    // orientación del polígono
+    let area = 0;
+    for (let k = 0; k < n; k++) area += poly[k][0] * poly[k + 1][1] - poly[k + 1][0] * poly[k][1];
+    const sign = area > 0 ? 1 : -1;
+    const edges = [];
+    for (let k = 0; k < n; k++) {
+      const [ax, ay] = poly[k], [bx, by] = poly[k + 1];
+      const ex = bx - ax, ey = by - ay, len = Math.hypot(ex, ey) || 1;
+      edges.push([ax, ay, ex / len * sign, ey / len * sign]);
+    }
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (let k = 0; k < n; k++) {
+      x0 = Math.min(x0, poly[k][0]); x1 = Math.max(x1, poly[k][0]);
+      y0 = Math.min(y0, poly[k][1]); y1 = Math.max(y1, poly[k][1]);
+    }
+
+    // Color del cristal = etiqueta mayoritaria en TODA su superficie
+    // (los detalles más finos que medio cristal no generan piezas sueltas)
+    const votes = {}; let lab = labelAt(pts[i][0], pts[i][1]), best = 0;
+    const st = Math.max(1, sp / 7);
+    for (let y = y0 + st / 2; y < y1; y += st)
+      for (let x = x0 + st / 2; x < x1; x += st) {
+        let inside = true;
+        for (const [ax, ay, ux, uy] of edges) if (ux * (y - ay) - uy * (x - ax) < 0) { inside = false; break; }
+        if (!inside) continue;
+        const l = rawLabel(x, y); if (l < 0) continue;
+        votes[l] = (votes[l] || 0) + 1;
+        if (votes[l] > best) { best = votes[l]; lab = l; }
+      }
+    c.beginPath(); for (let k = 0; k < n; k++) k ? c.lineTo(poly[k][0], poly[k][1]) : c.moveTo(poly[k][0], poly[k][1]);
+    c.closePath();
+    c.fillStyle = colorFor(lab, pts[i][0] / W, pts[i][1] / H);
+    c.fill();
+
+    const rv = Math.floor(rnd() * 255);
+    for (let y = Math.max(0, y0 | 0); y <= Math.min(H - 1, Math.ceil(y1)); y++) {
+      for (let x = Math.max(0, x0 | 0); x <= Math.min(W - 1, Math.ceil(x1)); x++) {
+        const px = x + 0.5, py = y + 0.5;
+        let d = Infinity;
+        for (const [ax, ay, ux, uy] of edges) {
+          const dd = ux * (py - ay) - uy * (px - ax); // distancia con signo al borde (interior > 0)
+          if (dd < d) d = dd;
+          if (d < 0) break;
+        }
+        if (d < 0) continue;
+        const o = (y * W + x) * 4;
+        const di = d - g;
+        if (di <= 0) continue;
+        geo[o] = Math.min(255, Math.round(di / bw * 255));
+        geo[o + 1] = rv;
+        geo[o + 2] = 255;
+        geo[o + 3] = 255;
+      }
+    }
+  }
+
+  // Cadenas doradas y ojos (dentro de los cristales, se refractan con ellos)
+  c.setTransform(s, 0, 0, s, ox, oy);
+  glowDot(c, 156, 660, 5, "hsl(45,80%,70%)");
+  const ex = head.x + Math.cos(head.ang) * 60 + Math.sin(head.ang) * 18;
+  const ey = head.y + Math.sin(head.ang) * 60 - Math.cos(head.ang) * 18;
+  glowDot(c, ex, ey, 4.5, "hsl(10,75%,58%)");
+  c.setTransform(1, 0, 0, 1, 0, 0);
+
+  return { W, H, col, geo };
+}
+
+/* ---------------- Shader liquid glass ---------------- */
+const VS = `
+attribute vec2 a;
+varying vec2 vUv;
+void main() { vUv = a * 0.5 + 0.5; vUv.y = 1.0 - vUv.y; gl_Position = vec4(a, 0.0, 1.0); }`;
+
+const FS = `
+precision highp float;
+varying vec2 vUv;
+uniform sampler2D uCol, uGeo;
+uniform vec2 uPx;          // 1/resolución
+uniform float uTime, uDpr, uAlpha;
+uniform vec2 uLight;       // posición de la luz (0..1)
+
+float D(vec2 uv) { return texture2D(uGeo, uv).r; }
+
+void main() {
+  vec4 geo = texture2D(uGeo, vUv);
+  vec3 grout = vec3(0.043, 0.043, 0.055);
+  if (geo.b < 0.5) { gl_FragColor = vec4(grout, 0.92); return; }
+
+  float d = geo.r;                       // 0 en el borde -> 1 en el interior
+  float rv = geo.g;                      // aleatorio por cristal
+
+  // Gradiente de la distancia -> dirección hacia el borde
+  vec2 e = uPx * 1.5;
+  vec2 grad = vec2(D(vUv + vec2(e.x, 0.0)) - D(vUv - vec2(e.x, 0.0)),
+                   D(vUv + vec2(0.0, e.y)) - D(vUv - vec2(0.0, e.y)));
+  vec2 outward = length(grad) > 1e-5 ? -normalize(grad) : vec2(0.0);
+
+  // Perfil del bisel (borde redondeado tipo gota)
+  float t = 1.0 - clamp(d, 0.0, 1.0);    // 1 en el borde, 0 en la meseta
+  float slope = t * t;
+  vec3 N = normalize(vec3(outward * slope * 1.6, 1.0));
+
+  // Refracción + aberración cromática
+  vec2 off = outward * slope * 0.5 * uDpr * uPx;
+  vec2 ab  = outward * slope * 0.08 * uDpr * uPx;
+  // ligero aumento hacia el centro del cristal
+  vec3 col;
+  col.r = texture2D(uCol, vUv - off - ab).r;
+  col.g = texture2D(uCol, vUv - off).g;
+  col.b = texture2D(uCol, vUv - off + ab).b;
+
+  // Iluminación
+  vec2 lp = uLight + 0.06 * vec2(sin(uTime * 0.5 + rv * 6.28), cos(uTime * 0.37 + rv * 6.28));
+  vec3 Ldir = normalize(vec3((lp - vUv) * 2.0, 0.9));
+  vec3 V = vec3(0.0, 0.0, 1.0);
+  vec3 H = normalize(Ldir + V);
+  float spec = pow(max(dot(N, H), 0.0), 60.0) * 0.3;
+  float diff = dot(N, Ldir) * 0.5 + 0.5;
+
+  // Brillo que recorre cada cristal
+  float sweep = smoothstep(0.85, 1.0, sin((vUv.x + vUv.y) * 9.0 - uTime * 0.6 + rv * 6.28)) * 0.06 * (1.0 - t);
+
+  // Borde: sombra interior y filo de luz
+  float rim = pow(t, 6.0);
+  col *= mix(0.78, 1.08, diff);
+  col = mix(col, col * 0.55, smoothstep(0.75, 1.0, t) * 0.5);
+  // Semitransparencia: más opaco en el bisel (vidrio más grueso), y los brillos siempre visibles
+  float alpha = mix(uAlpha, min(1.0, uAlpha + 0.35), smoothstep(0.2, 1.0, t));
+  vec3 light = vec3(spec + sweep + rim * 0.12 * diff);
+  alpha = clamp(alpha + max(light.r, 0.0) * 0.8, 0.0, 1.0);
+  col = min(col + light, vec3(1.0));
+
+  gl_FragColor = vec4(col, alpha);
+}`;
+
+let gl, prog, texCol, texGeo, raf, uni = {}, lightTarget = [0.25, 0.15], light = [0.25, 0.15];
+const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+function initGL(canvas) {
+  gl = canvas.getContext("webgl", { antialias: false, premultipliedAlpha: false });
+  if (!gl) return false;
+  const sh = (type, src) => {
+    const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+    return s;
+  };
+  prog = gl.createProgram();
+  gl.attachShader(prog, sh(gl.VERTEX_SHADER, VS));
+  gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, FS));
+  gl.linkProgram(prog); gl.useProgram(prog);
+  const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]), gl.STATIC_DRAW);
+  const loc = gl.getAttribLocation(prog, "a");
+  gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+  ["uCol", "uGeo", "uPx", "uTime", "uDpr", "uLight", "uAlpha"].forEach(n => uni[n] = gl.getUniformLocation(prog, n));
+  const mk = () => {
+    const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    return t;
+  };
+  texCol = mk(); texGeo = mk();
+  return true;
+}
+
+function build() {
+  const panel = document.getElementById("panel");
+  const canvas = document.getElementById("glass");
+  const pw = panel.clientWidth, ph = panel.clientHeight;
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const tex = buildTextures(pw, ph, dpr);
+  canvas.width = tex.W; canvas.height = tex.H;
+
+  if (!gl && !initGL(canvas)) {          // sin WebGL: se muestra el mosaico plano
+    const c2 = canvas.getContext("2d"); c2.drawImage(tex.col, 0, 0); return;
+  }
+  gl.viewport(0, 0, tex.W, tex.H);
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, texCol);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, tex.col);
+  gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, texGeo);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, tex.W, tex.H, 0, gl.RGBA, gl.UNSIGNED_BYTE, tex.geo);
+  gl.uniform1i(uni.uCol, 0); gl.uniform1i(uni.uGeo, 1);
+  gl.uniform2f(uni.uPx, 1 / tex.W, 1 / tex.H);
+  gl.uniform1f(uni.uDpr, dpr);
+  const ga = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--glass-alpha"));
+  gl.uniform1f(uni.uAlpha, isNaN(ga) ? 0.55 : ga);
+
+  cancelAnimationFrame(raf);
+  const t0 = performance.now();
+  const frame = now => {
+    light[0] += (lightTarget[0] - light[0]) * 0.06;
+    light[1] += (lightTarget[1] - light[1]) * 0.06;
+    gl.uniform1f(uni.uTime, reduceMotion ? 0 : (now - t0) / 1000);
+    gl.uniform2f(uni.uLight, light[0], light[1]);
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+    if (!reduceMotion) raf = requestAnimationFrame(frame);
+  };
+  raf = requestAnimationFrame(frame);
+}
+
+// La luz sigue suavemente al ratón
+window.addEventListener("pointermove", e => {
+  const b = document.getElementById("panel").getBoundingClientRect();
+  // la luz solo se desplaza un poco hacia el ratón (efecto muy sutil)
+  lightTarget = [0.25 + ((e.clientX - b.left) / b.width - 0.25) * 0.2, 0.15 + ((e.clientY - b.top) / b.height - 0.15) * 0.2];
+  if (reduceMotion && gl) {
+    light = lightTarget.slice();
+    gl.uniform2f(uni.uLight, light[0], light[1]);
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+  }
+}, { passive: true });
+
+window.addEventListener("DOMContentLoaded", build);
+let rt;
+window.addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(build, 250); });
+</script>
+</body>
+</html>
